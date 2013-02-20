@@ -8,6 +8,7 @@
 
 #import "FMDatabasePool.h"
 #import "FMDatabase.h"
+#import "FMDBLog.h"
 
 @interface FMDatabasePool()
 
@@ -97,7 +98,7 @@
                 NSUInteger currentCount = [_databaseOutPool count] + [_databaseInPool count];
                 
                 if (currentCount >= _maximumNumberOfDatabasesToCreate) {
-                    NSLog(@"Maximum number of databases (%ld) has already been reached!", (long)currentCount);
+                    FMDB_LOG_EF(@"Maximum number of databases (%ld) has already been reached!", (long)currentCount);
                     return;
                 }
             }
@@ -119,7 +120,7 @@
             }
         }
         else {
-            NSLog(@"Could not open up the database at path %@", _path);
+            FMDB_LOG_EF(@"Could not open up the database at path %@", _path);
             db = 0x00;
         }
     }];

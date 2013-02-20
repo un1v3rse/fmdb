@@ -8,6 +8,7 @@
 
 #import "FMDatabase.h"
 #import "FMDatabaseAdditions.h"
+#import "FMDBLog.h"
 
 @interface FMDatabase (PrivateStuff)
 - (FMResultSet *)executeQuery:(NSString *)sql withArgumentsInArray:(NSArray*)arrayArgs orDictionary:(NSDictionary *)dictionaryArgs orVAList:(va_list)args;
@@ -140,8 +141,7 @@ return ret;
             usleep(20);
             
             if (_busyRetryTimeout && (numberOfRetries++ > _busyRetryTimeout)) {
-                NSLog(@"%s:%d Database busy (%@)", __FUNCTION__, __LINE__, [self databasePath]);
-                NSLog(@"Database busy");
+                FMDB_LOG_EF(@"Database busy (%@)", [self databasePath]);
             }          
         } 
         else if (rc != SQLITE_OK) {
