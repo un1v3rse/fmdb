@@ -145,12 +145,11 @@
 
 
 
-- (BOOL)next {
+- (BOOL)_next:(int)retries {
     
     int rc;
-    BOOL retry;
-    int numberOfRetries = 0;
-    do {
+    BOOL retry = NO;
+    @synchronized (self) {
         retry = NO;
         
         rc = sqlite3_step([_statement statement]);
@@ -165,12 +164,10 @@
                     FMDB_LOG_EF(@"Unexpected result from sqlite3_reset (%d) rs", rc);
                 }
             }
-            usleep(20);
             
-            if ([_parentDB busyRetryTimeout] && (numberOfRetries++ > [_parentDB busyRetryTimeout])) {
+            if ([_parentDB busyRetryTimeout] && (retries > [_parentDB busyRetryTimeout])) {
                 
                 FMDB_LOG_EF(@"Database busy (%@)", [_parentDB databasePath]);
-                break;
             }
         }
         else if (SQLITE_DONE == rc || SQLITE_ROW == rc) {
@@ -178,20 +175,22 @@
         }
         else if (SQLITE_ERROR == rc) {
             FMDB_LOG_EF(@"Error calling sqlite3_step (%d: %s) rs", rc, sqlite3_errmsg([_parentDB sqliteHandle]));
-            break;
         } 
         else if (SQLITE_MISUSE == rc) {
             // uh oh.
             FMDB_LOG_EF(@"Error calling sqlite3_step (%d: %s) rs", rc, sqlite3_errmsg([_parentDB sqliteHandle]));
-            break;
         }
         else {
             // wtf?
             FMDB_LOG_EF(@"Unknown error calling sqlite3_step (%d: %s) rs", rc, sqlite3_errmsg([_parentDB sqliteHandle]));
-            break;
         }
         
-    } while (retry);
+    }
+    
+    if (retry) {
+        usleep(20);
+        return [self _next:retries+1];
+    }
     
     
     if (rc != SQLITE_ROW) {
@@ -199,6 +198,10 @@
     }
     
     return (rc == SQLITE_ROW);
+}
+
+- (BOOL)next {
+    return [self _next:0];
 }
 
 - (BOOL)hasAnotherRow {

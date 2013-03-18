@@ -3,6 +3,7 @@
 #import <objc/runtime.h>
 #import "FMDBLog.h"
 
+
 @interface FMDatabase ()
 
 - (FMResultSet *)executeQuery:(NSString *)sql withArgumentsInArray:(NSArray*)arrayArgs orDictionary:(NSDictionary *)dictionaryArgs orVAList:(va_list)args;
@@ -90,61 +91,65 @@
 }
 
 - (BOOL)open {
-    if (_db) {
+    @synchronized (self) {
+        if (_db) {
+            return YES;
+        }
+        
+        int err = sqlite3_open([self sqlitePath], &_db );
+        if(err != SQLITE_OK) {
+            FMDB_LOG_EF(@"error opening!: %d", err);
+            return NO;
+        }
+        
         return YES;
     }
-    
-    int err = sqlite3_open([self sqlitePath], &_db );
-    if(err != SQLITE_OK) {
-        FMDB_LOG_EF(@"error opening!: %d", err);
-        return NO;
-    }
-    
-    return YES;
 }
 
 #if SQLITE_VERSION_NUMBER >= 3005000
 - (BOOL)openWithFlags:(int)flags {
-    int err = sqlite3_open_v2([self sqlitePath], &_db, flags, NULL /* Name of VFS module to use */);
-    if(err != SQLITE_OK) {
-        FMDB_LOG_EF(@"error opening!: %d", err);
-        return NO;
+    @synchronized (self) {
+        int err = sqlite3_open_v2([self sqlitePath], &_db, flags, NULL /* Name of VFS module to use */);
+        if(err != SQLITE_OK) {
+            FMDB_LOG_EF(@"error opening!: %d", err);
+            return NO;
+        }
+        return YES;
     }
-    return YES;
 }
 #endif
 
 
-- (BOOL)close {
+
+
+
+
+- (BOOL)_close:(int)retries finalized_open:(BOOL)finalized_open {
+    BOOL retry = NO;
     
-    [self clearCachedStatements];
-    [self closeOpenResultSets];
+	@synchronized (self) {
     
-    if (!_db) {
-        return YES;
-    }
-    
-    int  rc;
-    BOOL retry;
-    int numberOfRetries = 0;
-    BOOL triedFinalizingOpenStatements = NO;
-    
-    do {
-        retry   = NO;
-        rc      = sqlite3_close(_db);
+        [self clearCachedStatements];
+        [self closeOpenResultSets];
         
+        if (!_db) {
+            return YES;
+        }
+        
+        int rc = sqlite3_close(_db);
+            
         if (SQLITE_BUSY == rc || SQLITE_LOCKED == rc) {
             
             retry = YES;
-            usleep(20);
             
-            if (_busyRetryTimeout && (numberOfRetries++ > _busyRetryTimeout)) {
+            if (_busyRetryTimeout && (retries > _busyRetryTimeout)) {
                 FMDB_LOG_W(@"Database busy, unable to close");
                 return NO;
             }
             
-            if (!triedFinalizingOpenStatements) {
-                triedFinalizingOpenStatements = YES;
+            // TODO: !CW! fix this, we should not ever need to do this.
+            if (!finalized_open) {
+                finalized_open = YES;
                 sqlite3_stmt *pStmt;
                 while ((pStmt = sqlite3_next_stmt(_db, 0x00)) !=0) {
                     FMDB_LOG_W(@"Closing leaked statement");
@@ -155,20 +160,33 @@
         else if (SQLITE_OK != rc) {
             FMDB_LOG_EF(@"error closing!: %d", rc);
         }
+        
+        if (!retry) {
+            _db = nil;
+        }
     }
-    while (retry);
     
-    _db = nil;
+    
+    if (retry) {
+        usleep(20);
+        return [self _close:retries+1 finalized_open:finalized_open];
+    }
     return YES;
+}
+
+- (BOOL)close {
+    return [self _close:0 finalized_open:NO];
 }
 
 - (void)clearCachedStatements {
     
-    for (FMStatement *cachedStmt in [_cachedStatements objectEnumerator]) {
-        [cachedStmt close];
+	@synchronized (self) {
+        for (FMStatement *cachedStmt in [_cachedStatements objectEnumerator]) {
+            [cachedStmt close];
+        }
+        
+        [_cachedStatements removeAllObjects];
     }
-    
-    [_cachedStatements removeAllObjects];
 }
 
 - (BOOL)hasOpenResultSets {
@@ -176,16 +194,17 @@
 }
 
 - (void)closeOpenResultSets {
-    
-    //Copy the set so we don't get mutation errors
-    NSMutableSet *openSetCopy = FMDBReturnAutoreleased([_openResultSets copy]);
-    for (NSValue *rsInWrappedInATastyValueMeal in openSetCopy) {
-        FMResultSet *rs = (FMResultSet *)[rsInWrappedInATastyValueMeal pointerValue];
-        
-        [rs setParentDB:nil];
-        [rs close];
-        
-        [_openResultSets removeObject:rsInWrappedInATastyValueMeal];
+	@synchronized (self) {
+        //Copy the set so we don't get mutation errors
+        NSMutableSet *openSetCopy = FMDBReturnAutoreleased([_openResultSets copy]);
+        for (NSValue *rsInWrappedInATastyValueMeal in openSetCopy) {
+            FMResultSet *rs = (FMResultSet *)[rsInWrappedInATastyValueMeal pointerValue];
+            
+            [rs setParentDB:nil];
+            [rs close];
+            
+            [_openResultSets removeObject:rsInWrappedInATastyValueMeal];
+        }
     }
 }
 
@@ -201,13 +220,15 @@
 
 - (void)setCachedStatement:(FMStatement*)statement forQuery:(NSString*)query {
     
-    query = [query copy]; // in case we got handed in a mutable string...
-    
-    [statement setQuery:query];
-    
-    [_cachedStatements setObject:statement forKey:query];
-    
-    FMDBRelease(query);
+	@synchronized (self) {
+        query = [query copy]; // in case we got handed in a mutable string...
+        
+        [statement setQuery:query];
+        
+        [_cachedStatements setObject:statement forKey:query];
+        
+        FMDBRelease(query);
+    }
 }
 
 
@@ -248,22 +269,25 @@
     NSDateFormatter *result = FMDBReturnAutoreleased([[NSDateFormatter alloc] init]);
     [result setDateFormat:format];
     [result setTimeZone:[NSTimeZone timeZoneForSecondsFromGMT:0]];
-    [result setLocale:FMDBReturnAutoreleased([[NSLocale alloc] initWithLocaleIdentifier:@"en_US"])];
+    NSLocale *l = FMDBReturnAutoreleased([[NSLocale alloc] initWithLocaleIdentifier:@"en_US"]);
+    [result setLocale:l];
     return result;
 }
 
 
 - (BOOL)goodConnection {
     
-    if (!_db) {
-        return NO;
-    }
-    
-    FMResultSet *rs = [self executeQuery:@"select name from sqlite_master where type='table'"];
-    
-    if (rs) {
-        [rs close];
-        return YES;
+	@synchronized (self) {
+        if (!_db) {
+            return NO;
+        }
+        
+        FMResultSet *rs = [self executeQuery:@"select name from sqlite_master where type='table'"];
+        
+        if (rs) {
+            [rs close];
+            return YES;
+        }
     }
     
     return NO;
@@ -325,34 +349,15 @@
 }
 
 - (sqlite_int64)lastInsertRowId {
-    
-    if (_isExecutingStatement) {
-        [self warnInUse];
-        return NO;
+	@synchronized (self) {
+        return sqlite3_last_insert_rowid(_db);
     }
-    
-    _isExecutingStatement = YES;
-    
-    sqlite_int64 ret = sqlite3_last_insert_rowid(_db);
-    
-    _isExecutingStatement = NO;
-    
-    return ret;
 }
 
 - (int)changes {
-    if (_isExecutingStatement) {
-        [self warnInUse];
-        return 0;
+	@synchronized (self) {
+        return sqlite3_changes(_db);
     }
-    
-    _isExecutingStatement = YES;
-    
-    int ret = sqlite3_changes(_db);
-    
-    _isExecutingStatement = NO;
-    
-    return ret;
 }
 
 - (void)bindObject:(id)obj toColumn:(int)idx inStatement:(sqlite3_stmt*)pStmt {
@@ -530,47 +535,48 @@
     return [self executeQuery:sql withArgumentsInArray:nil orDictionary:arguments orVAList:nil];
 }
 
-- (FMResultSet *)executeQuery:(NSString *)sql withArgumentsInArray:(NSArray*)arrayArgs orDictionary:(NSDictionary *)dictionaryArgs orVAList:(va_list)args {
+- (FMResultSet *)executeQuery:(NSString *)sql withArgumentsInArray:(NSArray*)arrayArgs orDictionary:(NSDictionary *)dictionaryArgs orVAList:(va_list)args retries:(int)retries {
     
-    if (![self databaseExists]) {
-        return 0x00;
-    }
+    BOOL retry = NO;
     
-    if (_isExecutingStatement) {
-        [self warnInUse];
-        return 0x00;
-    }
-    
-    _isExecutingStatement = YES;
-    
-    int rc                  = 0x00;
-    sqlite3_stmt *pStmt     = 0x00;
-    FMStatement *statement  = 0x00;
-    FMResultSet *rs         = 0x00;
-    
-    if (_traceExecution && sql) {
-        FMDB_LOG_IF(@"%@ executeQuery: %@", self, sql);
-    }
-    
-    if (_shouldCacheStatements) {
-        statement = [self cachedStatementForQuery:sql];
-        pStmt = statement ? [statement statement] : 0x00;
-        [statement reset];
-    }
-    
-    int numberOfRetries = 0;
-    BOOL retry          = NO;
-    
-    if (!pStmt) {
-        do {
-            retry   = NO;
+	@synchronized (self) {
+
+        if (![self databaseExists]) {
+            return 0x00;
+        }
+        
+        //FMDB_LOG_T_UNITS start = FMDB_LOG_T_TIME();
+        
+        int rc                  = 0x00;
+        sqlite3_stmt *pStmt     = 0x00;
+        FMStatement *statement  = 0x00;
+        FMResultSet *rs         = 0x00;
+        
+        if (_traceExecution && sql) {
+            FMDB_LOG_IF(@"%@ executeQuery: %@", self, sql);
+        }
+        
+        // there is a chance we won't use the cached statement even if we said we should
+        BOOL cache_statement = _shouldCacheStatements;
+        if (cache_statement) {
+            statement = [self cachedStatementForQuery:sql];
+            
+            // if the statement is in use, we will generate a new statement, and won't cache it later
+            if (statement.inUse) {
+                statement = nil;
+                cache_statement = NO;
+            }
+            
+            pStmt = statement ? [statement statement] : 0x00;
+        }
+        
+        if (!pStmt) {
             rc      = sqlite3_prepare_v2(_db, [sql UTF8String], -1, &pStmt, 0);
             
             if (SQLITE_BUSY == rc || SQLITE_LOCKED == rc) {
                 retry = YES;
-                usleep(20);
                 
-                if (_busyRetryTimeout && (numberOfRetries++ > _busyRetryTimeout)) {
+                if (_busyRetryTimeout && (retries++ > _busyRetryTimeout)) {
                     FMDB_LOG_EF(@"Database busy (%@)", [self databasePath]);
                     sqlite3_finalize(pStmt);
                     _isExecutingStatement = NO;
@@ -594,90 +600,116 @@
                 return nil;
             }
         }
-        while (retry);
-    }
-    
-    id obj;
-    int idx = 0;
-    int queryCount = sqlite3_bind_parameter_count(pStmt); // pointed out by Dominic Yu (thanks!)
-    
-    // If dictionaryArgs is passed in, that means we are using sqlite's named parameter support
-    if (dictionaryArgs) {
         
-        for (NSString *dictionaryKey in [dictionaryArgs allKeys]) {
+        if (!retry) {
+            id obj;
+            int idx = 0;
+            int queryCount = sqlite3_bind_parameter_count(pStmt); // pointed out by Dominic Yu (thanks!)
+#ifdef DEBUG
+            NSArray *logged_args = arrayArgs ? arrayArgs : [NSMutableArray array];
+#endif
             
-            // Prefix the key with a colon.
-            NSString *parameterName = [[NSString alloc] initWithFormat:@":%@", dictionaryKey];
-            
-            // Get the index for the parameter name.
-            int namedIdx = sqlite3_bind_parameter_index(pStmt, [parameterName UTF8String]);
-            
-            FMDBRelease(parameterName);
-            
-            if (namedIdx > 0) {
-                // Standard binding from here.
-                [self bindObject:[dictionaryArgs objectForKey:dictionaryKey] toColumn:namedIdx inStatement:pStmt];
-                // increment the binding count, so our check below works out
-                idx++;
+            // If dictionaryArgs is passed in, that means we are using sqlite's named parameter support
+            if (dictionaryArgs) {
+                
+                for (NSString *dictionaryKey in [dictionaryArgs allKeys]) {
+                    
+                    // Prefix the key with a colon.
+                    NSString *parameterName = [[NSString alloc] initWithFormat:@":%@", dictionaryKey];
+                    
+                    // Get the index for the parameter name.
+                    int namedIdx = sqlite3_bind_parameter_index(pStmt, [parameterName UTF8String]);
+                    
+                    FMDBRelease(parameterName);
+                    
+                    if (namedIdx > 0) {
+                        // Standard binding from here.
+                        [self bindObject:[dictionaryArgs objectForKey:dictionaryKey] toColumn:namedIdx inStatement:pStmt];
+                        
+#ifdef DEBUG
+                        [(NSMutableArray *)logged_args addObject:obj ? obj : @"<null>"];
+#endif
+                        
+                        // increment the binding count, so our check below works out
+                        idx++;
+                    }
+                    else {
+                        FMDB_LOG_WF(@"Could not find index for %@", dictionaryKey);
+                    }
+                }
             }
             else {
-                FMDB_LOG_WF(@"Could not find index for %@", dictionaryKey);
+                    
+                while (idx < queryCount) {
+                    
+                    if (arrayArgs) {
+                        obj = [arrayArgs objectAtIndex:(NSUInteger)idx];
+                    }
+                    else {
+                        obj = va_arg(args, id);
+#ifdef DEBUG
+                        [(NSMutableArray *)logged_args addObject:obj ? obj : @"<null>"];
+#endif
+                    }
+                    
+                    idx++;
+                    
+                    [self bindObject:obj toColumn:idx inStatement:pStmt];
+                }
             }
+            
+            if (idx != queryCount) {
+                FMDB_LOG_E(@"Error: the bind count is not correct for the # of variables");
+                sqlite3_finalize(pStmt);
+                _isExecutingStatement = NO;
+                return nil;
+            }
+            
+            FMDBRetain(statement); // to balance the release below
+            
+            if (!statement) {
+                statement = [[FMStatement alloc] init];
+                [statement setStatement:pStmt];
+                
+                if (cache_statement) {
+                    [self setCachedStatement:statement forQuery:sql];
+                }
+            }
+            
+            // the statement gets closed in rs's dealloc or [rs close];
+            rs = [FMResultSet resultSetWithStatement:statement usingParentDatabase:self];
+            [rs setQuery:sql];
+            
+            NSValue *openResultSet = [NSValue valueWithNonretainedObject:rs];
+            [_openResultSets addObject:openResultSet];
+            
+            [statement setUseCount:[statement useCount] + 1];
+            
+            FMDBRelease(statement);
+            
+            
+#ifdef DEBUG
+            FMDB_LOG_VF( @"sql: %@, args: %@ t: %llu", sql, [logged_args componentsJoinedByString:@", "], LOG_T_TIME() - start);
+#else
+            FMDB_LOG_TF_CUTOFF( QUERY_TIMING_CUTOFF, start, @"sql: %@", sql );
+#endif
+            return rs;
         }
     }
-    else {
-            
-        while (idx < queryCount) {
-            
-            if (arrayArgs) {
-                obj = [arrayArgs objectAtIndex:(NSUInteger)idx];
-            }
-            else {
-                obj = va_arg(args, id);
-            }
-            
-            if (_traceExecution) {
-                FMDB_LOG_IF(@"obj: %@", obj);
-            }
-            
-            idx++;
-            
-            [self bindObject:obj toColumn:idx inStatement:pStmt];
-        }
+    
+    if (retry) {
+        usleep(20);
+        return [self executeQuery:sql withArgumentsInArray:arrayArgs orDictionary:dictionaryArgs orVAList:args retries:retries + 1];
     }
     
-    if (idx != queryCount) {
-        FMDB_LOG_E(@"Error: the bind count is not correct for the # of variables");
-        sqlite3_finalize(pStmt);
-        _isExecutingStatement = NO;
-        return nil;
-    }
+    return nil;
+}
+
+- (FMResultSet *)executeQuery:(NSString *)sql withArgumentsInArray:(NSArray*)arrayArgs orDictionary:(NSDictionary *)dictionaryArgs orVAList:(va_list)args {
     
-    FMDBRetain(statement); // to balance the release below
     
-    if (!statement) {
-        statement = [[FMStatement alloc] init];
-        [statement setStatement:pStmt];
-        
-        if (_shouldCacheStatements) {
-            [self setCachedStatement:statement forQuery:sql];
-        }
-    }
+    return [self executeQuery:sql withArgumentsInArray:arrayArgs orDictionary:dictionaryArgs orVAList:args retries:0];
     
-    // the statement gets closed in rs's dealloc or [rs close];
-    rs = [FMResultSet resultSetWithStatement:statement usingParentDatabase:self];
-    [rs setQuery:sql];
-    
-    NSValue *openResultSet = [NSValue valueWithNonretainedObject:rs];
-    [_openResultSets addObject:openResultSet];
-    
-    [statement setUseCount:[statement useCount] + 1];
-    
-    FMDBRelease(statement); 
-    
-    _isExecutingStatement = NO;
-    
-    return rs;
 }
 
 - (FMResultSet *)executeQuery:(NSString*)sql, ... {
@@ -707,49 +739,40 @@
     return [self executeQuery:sql withArgumentsInArray:arguments orDictionary:nil orVAList:nil];
 }
 
-- (BOOL)executeUpdate:(NSString*)sql error:(NSError**)outErr withArgumentsInArray:(NSArray*)arrayArgs orDictionary:(NSDictionary *)dictionaryArgs orVAList:(va_list)args {
+
+- (BOOL)executeUpdate:(NSString*)sql error:(NSError**)outErr withArgumentsInArray:(NSArray*)arrayArgs orDictionary:(NSDictionary *)dictionaryArgs orVAList:(va_list)args retries:(int)retries
+{    
+    BOOL retry = NO;
     
-    if (![self databaseExists]) {
-        return NO;
-    }
+	@synchronized (self) {
     
-    if (_isExecutingStatement) {
-        [self warnInUse];
-        return NO;
-    }
-    
-    _isExecutingStatement = YES;
-    
-    int rc                   = 0x00;
-    sqlite3_stmt *pStmt      = 0x00;
-    FMStatement *cachedStmt  = 0x00;
-    
-    if (_traceExecution && sql) {
-        FMDB_LOG_IF(@"%@ executeUpdate: %@", self, sql);
-    }
-    
-    if (_shouldCacheStatements) {
-        cachedStmt = [self cachedStatementForQuery:sql];
-        pStmt = cachedStmt ? [cachedStmt statement] : 0x00;
-        [cachedStmt reset];
-    }
-    
-    int numberOfRetries = 0;
-    BOOL retry          = NO;
-    
-    if (!pStmt) {
+        if (![self databaseExists]) {
+            return NO;
+        }
         
-        do {
-            retry   = NO;
+        int rc                   = 0x00;
+        sqlite3_stmt *pStmt      = 0x00;
+        FMStatement *cachedStmt  = 0x00;
+        
+        if (_traceExecution && sql) {
+            FMDB_LOG_IF(@"%@ executeUpdate: %@", self, sql);
+        }
+        
+        if (_shouldCacheStatements) {
+            cachedStmt = [self cachedStatementForQuery:sql];
+            // our full exec is synced, no way for the statement to be in use here, unlike executeQuery
+            pStmt = cachedStmt ? [cachedStmt statement] : 0x00;
+        }
+        
+        if (!pStmt) {
+            
             rc      = sqlite3_prepare_v2(_db, [sql UTF8String], -1, &pStmt, 0);
             if (SQLITE_BUSY == rc || SQLITE_LOCKED == rc) {
                 retry = YES;
-                usleep(20);
                 
-                if (_busyRetryTimeout && (numberOfRetries++ > _busyRetryTimeout)) {
+                if (_busyRetryTimeout && (retries++ > _busyRetryTimeout)) {
                     FMDB_LOG_EF(@"Database busy (%@)", [self databasePath]);
                     sqlite3_finalize(pStmt);
-                    _isExecutingStatement = NO;
                     return NO;
                 }
             }
@@ -771,147 +794,163 @@
                     *outErr = [self errorWithMessage:[NSString stringWithUTF8String:sqlite3_errmsg(_db)]];
                 }
                 
-                _isExecutingStatement = NO;
                 return NO;
             }
         }
-        while (retry);
-    }
-    
-    id obj;
-    int idx = 0;
-    int queryCount = sqlite3_bind_parameter_count(pStmt);
-    
-    // If dictionaryArgs is passed in, that means we are using sqlite's named parameter support
-    if (dictionaryArgs) {
         
-        for (NSString *dictionaryKey in [dictionaryArgs allKeys]) {
+        if (!retry) {
+            id obj;
+            int idx = 0;
+            int queryCount = sqlite3_bind_parameter_count(pStmt);
+#ifdef DEBUG
+            NSArray *logged_args = arrayArgs ? arrayArgs : [NSMutableArray array];
+#endif
             
-            // Prefix the key with a colon.
-            NSString *parameterName = [[NSString alloc] initWithFormat:@":%@", dictionaryKey];
-            
-            // Get the index for the parameter name.
-            int namedIdx = sqlite3_bind_parameter_index(pStmt, [parameterName UTF8String]);
-            
-            FMDBRelease(parameterName);
-            
-            if (namedIdx > 0) {
-                // Standard binding from here.
-                [self bindObject:[dictionaryArgs objectForKey:dictionaryKey] toColumn:namedIdx inStatement:pStmt];
+            // If dictionaryArgs is passed in, that means we are using sqlite's named parameter support
+            if (dictionaryArgs) {
                 
-                // increment the binding count, so our check below works out
-                idx++;
-            }
-            else {
-                FMDB_LOG_EF(@"Could not find index for %@", dictionaryKey);
-            }
-        }
-    }
-    else {
-        
-        while (idx < queryCount) {
-            
-            if (arrayArgs) {
-                obj = [arrayArgs objectAtIndex:(NSUInteger)idx];
-            }
-            else {
-                obj = va_arg(args, id);
-            }
-            
-            if (_traceExecution) {
-                FMDB_LOG_IF(@"obj: %@", obj);
-            }
-            
-            idx++;
-            
-            [self bindObject:obj toColumn:idx inStatement:pStmt];
-        }
-    }
-    
-    
-    if (idx != queryCount) {
-        FMDB_LOG_EF(@"Error: the bind count (%d) is not correct for the # of variables in the query (%d) (%@) (executeUpdate)", idx, queryCount, sql);
-        sqlite3_finalize(pStmt);
-        _isExecutingStatement = NO;
-        return NO;
-    }
-    
-    /* Call sqlite3_step() to run the virtual machine. Since the SQL being
-     ** executed is not a SELECT statement, we assume no data will be returned.
-     */
-    numberOfRetries = 0;
-    
-    do {
-        rc      = sqlite3_step(pStmt);
-        retry   = NO;
-        
-        if (SQLITE_BUSY == rc || SQLITE_LOCKED == rc) {
-            // this will happen if the db is locked, like if we are doing an update or insert.
-            // in that case, retry the step... and maybe wait just 10 milliseconds.
-            retry = YES;
-            if (SQLITE_LOCKED == rc) {
-                rc = sqlite3_reset(pStmt);
-                if (rc != SQLITE_LOCKED) {
-                    FMDB_LOG_EF(@"Unexpected result from sqlite3_reset (%d) eu", rc);
+                for (NSString *dictionaryKey in [dictionaryArgs allKeys]) {
+                    
+                    // Prefix the key with a colon.
+                    NSString *parameterName = [[NSString alloc] initWithFormat:@":%@", dictionaryKey];
+                    
+                    // Get the index for the parameter name.
+                    int namedIdx = sqlite3_bind_parameter_index(pStmt, [parameterName UTF8String]);
+                    
+                    FMDBRelease(parameterName);
+                    
+                    if (namedIdx > 0) {
+                        // Standard binding from here.
+                        [self bindObject:[dictionaryArgs objectForKey:dictionaryKey] toColumn:namedIdx inStatement:pStmt];
+#ifdef DEBUG
+                        [(NSMutableArray *)logged_args addObject:obj ? obj : @"<null>"];
+#endif
+                        
+                        // increment the binding count, so our check below works out
+                        idx++;
+                    }
+                    else {
+                        FMDB_LOG_EF(@"Could not find index for %@", dictionaryKey);
+                    }
                 }
             }
-            usleep(20);
+            else {
+                
+                while (idx < queryCount) {
+                    
+                    if (arrayArgs) {
+                        obj = [arrayArgs objectAtIndex:(NSUInteger)idx];
+                    }
+                    else {
+                        obj = va_arg(args, id);
+#ifdef DEBUG
+                        [(NSMutableArray *)logged_args addObject:obj ? obj : @"<null>"];
+#endif
+                    }
+                    
+                    idx++;
+                    
+                    [self bindObject:obj toColumn:idx inStatement:pStmt];
+                }
+            }
             
-            if (_busyRetryTimeout && (numberOfRetries++ > _busyRetryTimeout)) {
-                FMDB_LOG_EF(@"Database busy (%@)", [self databasePath]);
-                retry = NO;
+            
+            if (idx != queryCount) {
+                FMDB_LOG_EF(@"Error: the bind count (%d) is not correct for the # of variables in the query (%d) (%@) (executeUpdate)", idx, queryCount, sql);
+                sqlite3_finalize(pStmt);
+                return NO;
+            }
+        
+            /* Call sqlite3_step() to run the virtual machine. Since the SQL being
+             ** executed is not a SELECT statement, we assume no data will be returned.
+             */
+            rc      = sqlite3_step(pStmt);
+                
+            if (SQLITE_BUSY == rc || SQLITE_LOCKED == rc) {
+                // this will happen if the db is locked, like if we are doing an update or insert.
+                // in that case, retry the step... and maybe wait just 10 milliseconds.
+                retry = YES;
+                if (SQLITE_LOCKED == rc) {
+                    rc = sqlite3_reset(pStmt);
+                    if (rc != SQLITE_LOCKED) {
+                        FMDB_LOG_EF(@"Unexpected result from sqlite3_reset (%d) eu", rc);
+                    }
+                }
+                
+                if (_busyRetryTimeout && (retries > _busyRetryTimeout)) {
+                    FMDB_LOG_EF(@"Database busy (%@)", [self databasePath]);
+                    retry = NO;
+                }
+            }
+            else if (SQLITE_DONE == rc) {
+                // all is well, let's return.
+            }
+            else if (SQLITE_ERROR == rc) {
+                FMDB_LOG_EF(@"Error calling sqlite3_step (%d: %s) SQLITE_ERROR\nDB Query: %@", rc, sqlite3_errmsg(_db), sql);
+            }
+            else if (SQLITE_MISUSE == rc) {
+                // uh oh.
+                FMDB_LOG_EF(@"Error calling sqlite3_step (%d: %s) SQLITE_MISUSE\nDB Query: %@", rc, sqlite3_errmsg(_db), sql);
+            }
+            else {
+                // wtf?
+                FMDB_LOG_EF(@"Unknown error calling sqlite3_step (%d: %s) eu\nDB Query: %@", rc, sqlite3_errmsg(_db), sql);
+            }
+            
+            if (!retry) {
+                if (rc == SQLITE_ROW) {
+                    FMDB_LOG_AF(NO, @"A executeUpdate is being called with a query string '%@'", sql);
+                }
+                
+                if (_shouldCacheStatements && !cachedStmt) {
+                    cachedStmt = [[FMStatement alloc] init];
+                    
+                    [cachedStmt setStatement:pStmt];
+                    
+                    [self setCachedStatement:cachedStmt forQuery:sql];
+                    
+                    FMDBRelease(cachedStmt);
+                }
+                
+                int closeErrorCode;
+                
+                if (cachedStmt) {
+                    [cachedStmt setUseCount:[cachedStmt useCount] + 1];
+                    closeErrorCode = sqlite3_reset(pStmt);
+                }
+                else {
+                    /* Finalize the virtual machine. This releases all memory and other
+                     ** resources allocated by the sqlite3_prepare() call above.
+                     */
+                    closeErrorCode = sqlite3_finalize(pStmt);
+                }
+                
+                if (closeErrorCode != SQLITE_OK) {
+                    FMDB_LOG_EF(@"Unknown error finalizing or resetting statement (%d: %s)\nDB Query: %@", closeErrorCode, sqlite3_errmsg(_db), sql);
+                }
+                
+#ifdef DEBUG
+                FMDB_LOG_VF( @"sql: %@, args: %@ t: %llu", sql, [logged_args componentsJoinedByString:@", "], LOG_T_TIME() - start);
+#else
+                FMDB_LOG_TF_CUTOFF( QUERY_TIMING_CUTOFF, start, @"sql: %@", sql );
+#endif
+                
+                return (rc == SQLITE_DONE || rc == SQLITE_OK);
             }
         }
-        else if (SQLITE_DONE == rc) {
-            // all is well, let's return.
-        }
-        else if (SQLITE_ERROR == rc) {
-            FMDB_LOG_EF(@"Error calling sqlite3_step (%d: %s) SQLITE_ERROR\nDB Query: %@", rc, sqlite3_errmsg(_db), sql);
-        }
-        else if (SQLITE_MISUSE == rc) {
-            // uh oh.
-            FMDB_LOG_EF(@"Error calling sqlite3_step (%d: %s) SQLITE_MISUSE\nDB Query: %@", rc, sqlite3_errmsg(_db), sql);
-        }
-        else {
-            // wtf?
-            FMDB_LOG_EF(@"Unknown error calling sqlite3_step (%d: %s) eu\nDB Query: %@", rc, sqlite3_errmsg(_db), sql);
-        }
-        
-    } while (retry);
-    
-    if (rc == SQLITE_ROW) {
-        FMDB_LOG_AF(NO, @"A executeUpdate is being called with a query string '%@'", sql);
     }
     
-    if (_shouldCacheStatements && !cachedStmt) {
-        cachedStmt = [[FMStatement alloc] init];
-        
-        [cachedStmt setStatement:pStmt];
-        
-        [self setCachedStatement:cachedStmt forQuery:sql];
-        
-        FMDBRelease(cachedStmt);
+    if (retry) {
+        usleep(20);
+        return [self executeUpdate:sql error:outErr withArgumentsInArray:arrayArgs orDictionary:dictionaryArgs orVAList:args retries:retries+1];
     }
-    
-    int closeErrorCode;
-    
-    if (cachedStmt) {
-        [cachedStmt setUseCount:[cachedStmt useCount] + 1];
-        closeErrorCode = sqlite3_reset(pStmt);
-    }
-    else {
-        /* Finalize the virtual machine. This releases all memory and other
-         ** resources allocated by the sqlite3_prepare() call above.
-         */
-        closeErrorCode = sqlite3_finalize(pStmt);
-    }
-    
-    if (closeErrorCode != SQLITE_OK) {
-        FMDB_LOG_EF(@"Unknown error finalizing or resetting statement (%d: %s)\nDB Query: %@", closeErrorCode, sqlite3_errmsg(_db), sql);
-    }
-    
-    _isExecutingStatement = NO;
-    return (rc == SQLITE_DONE || rc == SQLITE_OK);
+    return NO;
+}
+
+
+- (BOOL)executeUpdate:(NSString*)sql error:(NSError**)outErr withArgumentsInArray:(NSArray*)arrayArgs orDictionary:(NSDictionary *)dictionaryArgs orVAList:(va_list)args
+{
+    return [self executeUpdate:sql error:outErr withArgumentsInArray:arrayArgs orDictionary:dictionaryArgs orVAList:args retries:0];
 }
 
 
@@ -1129,6 +1168,7 @@ void FMDBBlockSQLiteCallBackFunction(sqlite3_context *context, int argc, sqlite3
 @synthesize statement=_statement;
 @synthesize query=_query;
 @synthesize useCount=_useCount;
+@synthesize inUse=_inUse;
 
 - (void)finalize {
     [self close];
@@ -1153,6 +1193,7 @@ void FMDBBlockSQLiteCallBackFunction(sqlite3_context *context, int argc, sqlite3
 - (void)reset {
     if (_statement) {
         sqlite3_reset(_statement);
+        self.inUse = NO;
     }
 }
 

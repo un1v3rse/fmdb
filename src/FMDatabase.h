@@ -167,11 +167,13 @@
     sqlite3_stmt *_statement;
     NSString *_query;
     long _useCount;
+    BOOL _inUse;
 }
 
 @property (atomic, assign) long useCount;
 @property (atomic, retain) NSString *query;
 @property (atomic, assign) sqlite3_stmt *statement;
+@property (atomic, assign) BOOL inUse;
 
 - (void)close;
 - (void)reset;

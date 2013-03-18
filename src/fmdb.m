@@ -10,6 +10,7 @@
 void testPool(NSString *dbPath);
 void testDateFormat();
 void testLog();
+void testConcurrency();
 void FMDBReportABugFunction();
 
 int main (int argc, const char * argv[]) {
@@ -809,7 +810,7 @@ int main (int argc, const char * argv[]) {
     testPool(dbPath);
     testDateFormat();
     testLog();
-    
+    testConcurrency();
     
     FMDatabaseQueue *queue = [FMDatabaseQueue databaseQueueWithPath:dbPath];
     
@@ -1378,6 +1379,40 @@ void testLog() {
 
 
 /*
+ Test concurrency
+ */
+
+void testConcurrency() {
+    
+    FMDatabase *db = [FMDatabase databaseWithPath:nil]; // use in-memory DB
+    [db open];
+    
+    [db executeUpdate:@"DROP TABLE IF EXISTS test_concurrency"];
+    [db executeUpdate:@"CREATE TABLE test_concurrency ( test TEXT )"];
+    
+    TesterBlock op1 = ^() {
+        int count = [db intForQuery:@"SELECT COUNT(*) FROM test_concurrency"];
+        [db executeUpdate:@"INSERT INTO test_concurrency VALUES (?)", [NSNumber numberWithInt:count]];
+        FMDB_LOG_IF(@"Op1 Inserted: %@", [NSNumber numberWithInt:count] );
+    };
+    TesterBlock op2 = ^() {
+        NSString *lastValue = nil;
+        FMResultSet *rs = [db executeQuery:@"SELECT test FROM test_concurrency"];
+        while ([rs next]) {
+            lastValue = [rs stringForColumnIndex:0];
+        }
+        [rs close];
+        FMDB_LOG_IF(@"Op2 Last Value:%@", lastValue ? lastValue : @"<NULL>" );
+    };
+    
+    [Tester loop_threading_concurrency:op1
+                            operation2:op2];
+    
+
+}
+
+
+/*
  What is this function for?  Think of it as a template which a developer can use
  to report bugs.
  
@@ -1423,6 +1458,44 @@ void FMDBReportABugFunction() {
     
 }
 
+
+
+typedef void(^TesterBlock)();
+
+@interface Tester : NSObject
+
+/** Run two operations concurrently, useful for testing for deadlocks in isolation.
+ 
+ @param operation1 - first operation block
+ @param operation2 - second operation block
+ 
+ */
++ (void)loop_threading_concurrency:(TesterBlock)operation1
+                        operation2:(TesterBlock)operation2;
+
+@end
+
+
+@implementation Tester
+
+
++ (void)loop_threading_concurrency_operation:(TesterBlock)operation {
+	@autoreleasepool { // we're in a new thread here, so we need our own autorelease pool
+        while (true) {
+            operation();
+        }
+    }
+}
+
+
++ (void)loop_threading_concurrency:(TesterBlock)operation1
+                        operation2:(TesterBlock)operation2
+{
+    [NSThread detachNewThreadSelector:@selector(loop_threading_concurrency_operation:) toTarget:self withObject:operation1];
+    [NSThread detachNewThreadSelector:@selector(loop_threading_concurrency_operation:) toTarget:self withObject:operation2];
+}
+
+@end
 
 
 

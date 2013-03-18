@@ -127,20 +127,17 @@ return ret;
 
 #pragma clang diagnostic pop
 
-- (BOOL)validateSQL:(NSString*)sql error:(NSError**)error {
+- (BOOL)validateSQL:(NSString*)sql error:(NSError**)error retries:(int)retries {
     sqlite3_stmt *pStmt = NULL;
     BOOL validationSucceeded = YES;
-    BOOL keepTrying = YES;
-    int numberOfRetries = 0;
+    BOOL retry = NO;
     
-    while (keepTrying == YES) {
-        keepTrying = NO;
+    @synchronized (self) {
         int rc = sqlite3_prepare_v2(_db, [sql UTF8String], -1, &pStmt, 0);
         if (rc == SQLITE_BUSY || rc == SQLITE_LOCKED) {
-            keepTrying = YES;
-            usleep(20);
+            retry = YES;
             
-            if (_busyRetryTimeout && (numberOfRetries++ > _busyRetryTimeout)) {
+            if (_busyRetryTimeout && (retries > _busyRetryTimeout)) {
                 FMDB_LOG_EF(@"Database busy (%@)", [self databasePath]);
             }          
         } 
@@ -157,7 +154,16 @@ return ret;
     
     sqlite3_finalize(pStmt);
     
+    if (retry) {
+        usleep(20);
+        return [self validateSQL:sql error:error retries:retries+1];
+    }
+    
     return validationSucceeded;
+}
+
+- (BOOL)validateSQL:(NSString*)sql error:(NSError**)error {
+    return [self validateSQL:sql error:error retries:0];
 }
 
 @end
