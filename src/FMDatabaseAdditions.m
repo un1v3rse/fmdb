@@ -137,8 +137,10 @@ return ret;
         if (rc == SQLITE_BUSY || rc == SQLITE_LOCKED) {
             retry = YES;
             
-            if (_busyRetryTimeout && (retries > _busyRetryTimeout)) {
+            if (retries >= _maxBusyRetries) {
                 FMDB_LOG_EF(@"Database busy (%@)", [self databasePath]);
+                validationSucceeded = NO;
+                retry = NO;
             }          
         } 
         else if (rc != SQLITE_OK) {

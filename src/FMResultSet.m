@@ -28,6 +28,9 @@
 }
 
 - (void)dealloc {
+    FMDB_LOG_A(!_parentDB, @"Result set should be closed explicitly by now");
+    
+    
     [self close];
     
     FMDBRelease(_query);
@@ -46,8 +49,6 @@
     FMDBRelease(_statement);
     _statement = nil;
     
-    // we don't need this anymore... (i think)
-    //[_parentDB setInUse:NO];
     [_parentDB resultSetDidClose:self];
     _parentDB = nil;
 }
@@ -165,9 +166,9 @@
                 }
             }
             
-            if ([_parentDB busyRetryTimeout] && (retries > [_parentDB busyRetryTimeout])) {
-                
+            if (retries >= [_parentDB maxBusyRetries]) {
                 FMDB_LOG_EF(@"Database busy (%@)", [_parentDB databasePath]);
+                retry = NO;
             }
         }
         else if (SQLITE_DONE == rc || SQLITE_ROW == rc) {
@@ -303,8 +304,8 @@
     }
     
     
-	return _parentDB.dateFormat
-        ? [_parentDB.dateFormat dateFromString:[self stringForColumnIndex:columnIdx]]
+	return _parentDB.hasDateFormatter
+        ? [_parentDB dateFromString:[self stringForColumnIndex:columnIdx]]
         : [NSDate dateWithTimeIntervalSince1970:[self doubleForColumnIndex:columnIdx]];
 }
 

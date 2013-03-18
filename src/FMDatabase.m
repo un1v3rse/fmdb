@@ -3,6 +3,9 @@
 #import <objc/runtime.h>
 #import "FMDBLog.h"
 
+#ifndef DEBUG
+static FMDB_LOG_T_UNITS QUERY_TIMING_CUTOFF = 0;
+#endif // ! DEBUG
 
 @interface FMDatabase ()
 
@@ -12,12 +15,30 @@
 
 @implementation FMDatabase
 @synthesize cachedStatements=_cachedStatements;
-@synthesize dateFormat=_dateFormat;
 @synthesize logsErrors=_logsErrors;
 @synthesize crashOnErrors=_crashOnErrors;
-@synthesize busyRetryTimeout=_busyRetryTimeout;
+@synthesize maxBusyRetries=_maxBusyRetries;
 @synthesize checkedOut=_checkedOut;
 @synthesize traceExecution=_traceExecution;
+
++ (void)initialize {
+    // set sqlite to be thread safe on the connection
+    
+    //QUERY_TIMING_CUTOFF = [Log t_units_from_interval:0.1];
+    
+    sqlite3_shutdown();
+    if (sqlite3_threadsafe() > 0) {
+        int retCode = sqlite3_config(SQLITE_CONFIG_SERIALIZED);
+        if (retCode == SQLITE_OK) {
+            FMDB_LOG_I(@"Can now use sqlite on multiple threads, using the same connection");
+        } else {
+            FMDB_LOG_EF(@"setting sqlite thread safe mode to serialized failed!!! return code: %d", retCode);
+        }
+    } else {
+        FMDB_LOG_E(@"Your SQLite database is not compiled to be threadsafe.");
+    }
+    sqlite3_initialize();
+}
 
 + (id)databaseWithPath:(NSString*)aPath {
     return FMDBReturnAutoreleased([[self alloc] initWithPath:aPath]);
@@ -44,7 +65,9 @@
         _db                 = 0x00;
         _logsErrors         = 0x00;
         _crashOnErrors      = 0x00;
-        _busyRetryTimeout   = 0x00;
+        _maxBusyRetries     = 0x00;
+        
+        _dateFormatLock = [[NSObject alloc] init];
     }
     
     return self;
@@ -62,6 +85,7 @@
     FMDBRelease(_dateFormat);
     FMDBRelease(_databasePath);
     FMDBRelease(_openFunctions);
+    FMDBRelease(_dateFormatLock);
     
 #if ! __has_feature(objc_arc)
     [super dealloc];
@@ -142,7 +166,7 @@
             
             retry = YES;
             
-            if (_busyRetryTimeout && (retries > _busyRetryTimeout)) {
+            if (retries >= _maxBusyRetries) {
                 FMDB_LOG_W(@"Database busy, unable to close");
                 return NO;
             }
@@ -267,11 +291,34 @@
 + (NSDateFormatter *)storeableDateFormat:(NSString *)format {
     
     NSDateFormatter *result = FMDBReturnAutoreleased([[NSDateFormatter alloc] init]);
-    [result setDateFormat:format];
-    [result setTimeZone:[NSTimeZone timeZoneForSecondsFromGMT:0]];
-    NSLocale *l = FMDBReturnAutoreleased([[NSLocale alloc] initWithLocaleIdentifier:@"en_US"]);
-    [result setLocale:l];
+    result.dateFormat = format;
+    result.timeZone = [NSTimeZone timeZoneForSecondsFromGMT:0];
+    result.locale = FMDBReturnAutoreleased([[NSLocale alloc] initWithLocaleIdentifier:@"en_US"]);
     return result;
+}
+
+
+- (BOOL)hasDateFormatter {
+    return _dateFormat != nil;
+}
+
+- (void)setDateFormat:(NSDateFormatter *)format {
+    @synchronized (_dateFormatLock) {
+        FMDBAutorelease(_dateFormat);
+        _dateFormat = FMDBReturnRetained(format);
+    }
+}
+
+- (NSDate *)dateFromString:(NSString *)s {
+    @synchronized (_dateFormatLock) {
+        return [_dateFormat dateFromString:s];
+    }
+}
+
+- (NSString *)stringFromDate:(NSDate *)date {
+    @synchronized (_dateFormatLock) {
+        return [_dateFormat stringFromDate:date];
+    }
 }
 
 
@@ -377,8 +424,8 @@
         sqlite3_bind_blob(pStmt, idx, bytes, (int)[obj length], SQLITE_STATIC);
     }
     else if ([obj isKindOfClass:[NSDate class]]) {
-        if (_dateFormat)
-            sqlite3_bind_text(pStmt, idx, [[_dateFormat stringFromDate:obj] UTF8String], -1, SQLITE_STATIC);
+        if (self.hasDateFormatter)
+            sqlite3_bind_text(pStmt, idx, [[self stringFromDate:obj] UTF8String], -1, SQLITE_STATIC);
         else
             sqlite3_bind_double(pStmt, idx, [obj timeIntervalSince1970]);
     }
@@ -545,7 +592,7 @@
             return 0x00;
         }
         
-        //FMDB_LOG_T_UNITS start = FMDB_LOG_T_TIME();
+        FMDB_LOG_T_UNITS start = FMDB_LOG_T_TIME();
         
         int rc                  = 0x00;
         sqlite3_stmt *pStmt     = 0x00;
@@ -576,7 +623,7 @@
             if (SQLITE_BUSY == rc || SQLITE_LOCKED == rc) {
                 retry = YES;
                 
-                if (_busyRetryTimeout && (retries++ > _busyRetryTimeout)) {
+                if (retries >= _maxBusyRetries) {
                     FMDB_LOG_EF(@"Database busy (%@)", [self databasePath]);
                     sqlite3_finalize(pStmt);
                     _isExecutingStatement = NO;
@@ -634,7 +681,7 @@
                         idx++;
                     }
                     else {
-                        FMDB_LOG_WF(@"Could not find index for %@", dictionaryKey);
+                        FMDB_LOG_VF(@"Could not find index for %@", dictionaryKey);
                     }
                 }
             }
@@ -683,13 +730,14 @@
             NSValue *openResultSet = [NSValue valueWithNonretainedObject:rs];
             [_openResultSets addObject:openResultSet];
             
-            [statement setUseCount:[statement useCount] + 1];
+            [statement incUseCount];
+            statement.inUse = YES;
             
             FMDBRelease(statement);
             
             
 #ifdef DEBUG
-            FMDB_LOG_VF( @"sql: %@, args: %@ t: %llu", sql, [logged_args componentsJoinedByString:@", "], LOG_T_TIME() - start);
+            FMDB_LOG_VF( @"sql: %@, args: %@ t: %llu", sql, [logged_args componentsJoinedByString:@", "], FMDB_LOG_T_TIME() - start);
 #else
             FMDB_LOG_TF_CUTOFF( QUERY_TIMING_CUTOFF, start, @"sql: %@", sql );
 #endif
@@ -750,6 +798,8 @@
             return NO;
         }
         
+        FMDB_LOG_T_UNITS start = FMDB_LOG_T_TIME();
+        
         int rc                   = 0x00;
         sqlite3_stmt *pStmt      = 0x00;
         FMStatement *cachedStmt  = 0x00;
@@ -770,7 +820,7 @@
             if (SQLITE_BUSY == rc || SQLITE_LOCKED == rc) {
                 retry = YES;
                 
-                if (_busyRetryTimeout && (retries++ > _busyRetryTimeout)) {
+                if (retries >= _maxBusyRetries) {
                     FMDB_LOG_EF(@"Database busy (%@)", [self databasePath]);
                     sqlite3_finalize(pStmt);
                     return NO;
@@ -830,7 +880,7 @@
                         idx++;
                     }
                     else {
-                        FMDB_LOG_EF(@"Could not find index for %@", dictionaryKey);
+                        FMDB_LOG_VF(@"Could not find index for %@", dictionaryKey);
                     }
                 }
             }
@@ -877,7 +927,7 @@
                     }
                 }
                 
-                if (_busyRetryTimeout && (retries > _busyRetryTimeout)) {
+                if (retries >= _maxBusyRetries) {
                     FMDB_LOG_EF(@"Database busy (%@)", [self databasePath]);
                     retry = NO;
                 }
@@ -915,7 +965,7 @@
                 int closeErrorCode;
                 
                 if (cachedStmt) {
-                    [cachedStmt setUseCount:[cachedStmt useCount] + 1];
+                    [cachedStmt incUseCount];
                     closeErrorCode = sqlite3_reset(pStmt);
                 }
                 else {
@@ -930,7 +980,7 @@
                 }
                 
 #ifdef DEBUG
-                FMDB_LOG_VF( @"sql: %@, args: %@ t: %llu", sql, [logged_args componentsJoinedByString:@", "], LOG_T_TIME() - start);
+                FMDB_LOG_VF( @"sql: %@, args: %@ t: %llu", sql, [logged_args componentsJoinedByString:@", "], FMDB_LOG_T_TIME() - start);
 #else
                 FMDB_LOG_TF_CUTOFF( QUERY_TIMING_CUTOFF, start, @"sql: %@", sql );
 #endif
@@ -1198,7 +1248,13 @@ void FMDBBlockSQLiteCallBackFunction(sqlite3_context *context, int argc, sqlite3
 }
 
 - (NSString*)description {
-    return [NSString stringWithFormat:@"%@ %ld hit(s) for query %@", [super description], _useCount, _query];
+    return [NSString stringWithFormat:@"%@ %@ %ld hit(s) for query %@", [super description], _inUse ? @"In Use" : @"Not In Use", _useCount, _query];
+}
+
+- (void)incUseCount {
+    @synchronized (self) {
+        ++_useCount;
+    }
 }
 
 

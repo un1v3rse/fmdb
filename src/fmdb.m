@@ -13,7 +13,37 @@ void testLog();
 void testConcurrency();
 void FMDBReportABugFunction();
 
+
+// custom handler for exceptions
+void uncaughtExceptionHandler(NSException *exception) {
+    FMDB_LOG_EF(@"CRASH: %@\nStack Trace: %@", exception, [exception callStackSymbols]);
+    // Internal error reporting
+}
+
+
+typedef void(^TesterBlock)();
+
+@interface Tester : NSObject
+
+/** Run two operations concurrently, useful for testing for deadlocks in isolation.
+ 
+ @param operation1 - first operation block
+ @param operation2 - second operation block
+ 
+ */
++ (void)loop_threading_concurrency:(TesterBlock)operation1
+                        operation2:(TesterBlock)operation2
+                           timeout:(NSTimeInterval)timeout;
+
+@end
+
+
 int main (int argc, const char * argv[]) {
+    
+    FMDB_LOG_SET_LEVEL(LOG_LEVEL_VERBOSE);
+    FMDB_LOG_SET_LEVEL(LOG_LEVEL_ERROR);
+    
+    NSSetUncaughtExceptionHandler(&uncaughtExceptionHandler);
     
 @autoreleasepool {
     
@@ -32,7 +62,9 @@ int main (int argc, const char * argv[]) {
     {
         // -------------------------------------------------------------------------------
         // Un-opened database check.
+        FMDB_LOG_SET_DEBUG_BREAK_ENABLED( NO );
         FMDBQuickCheck([db executeQuery:@"select * from table"] == nil);
+        FMDB_LOG_SET_DEBUG_BREAK_ENABLED( YES );
         FMDB_LOG_IF(@"%d: %@", [db lastErrorCode], [db lastErrorMessage]);
     }
     
@@ -50,10 +82,7 @@ int main (int argc, const char * argv[]) {
     [db executeUpdate:@"blah blah blah"];
     
     FMDBQuickCheck([db hadError]);
-    
-    if ([db hadError]) {
-        FMDB_LOG_EF(@"Err %d: %@", [db lastErrorCode], [db lastErrorMessage]);
-    }
+    FMDB_LOG_IF(@"Err %d: %@", [db lastErrorCode], [db lastErrorMessage]);
     
     NSError *err = 0x00;
     FMDBQuickCheck(![db update:@"blah blah blah" withErrorAndBindings:&err]);
@@ -320,9 +349,9 @@ int main (int argc, const char * argv[]) {
         FMDB_LOG_E(@"intForQuery didn't work (a != 5)");
     }
     
-    // test the busy rety timeout schtuff.
+    // test the busy retry schtuff.
     
-    [db setBusyRetryTimeout:500];
+    [db setMaxBusyRetries:5];
     
     FMDatabase *newDb = [FMDatabase databaseWithPath:dbPath];
     [newDb open];
@@ -332,7 +361,9 @@ int main (int argc, const char * argv[]) {
     
     FMDB_LOG_I(@"Testing the busy timeout");
     
+    FMDB_LOG_SET_DEBUG_BREAK_ENABLED( NO );
     BOOL success = [db executeUpdate:@"insert into t1 values (5)"];
+    FMDB_LOG_SET_DEBUG_BREAK_ENABLED( YES );
     
     if (success) {
         FMDB_LOG_E(@"Whoa- the database didn't stay locked!");
@@ -790,7 +821,7 @@ int main (int argc, const char * argv[]) {
         FMStatement *statement;
         
         while ((statement = [e nextObject])) {
-            FMDB_LOG_I(statement);
+            FMDB_LOG_I([statement description]);
         }
     }
     
@@ -1115,7 +1146,9 @@ void testPool(NSString *dbPath) {
     
     [dbPool inDatabase:^(FMDatabase *db) {
         [dbPool inDatabase:^(FMDatabase *db2) {
+            FMDB_LOG_SET_DEBUG_BREAK_ENABLED(NO);
             [dbPool inDatabase:^(FMDatabase *db3) {
+                FMDB_LOG_SET_DEBUG_BREAK_ENABLED(YES);
                 FMDBQuickCheck([dbPool countOfOpenDatabases] == 2);
                 FMDBQuickCheck(!db3);
             }];
@@ -1363,6 +1396,7 @@ void testDateFormat() {
  */
 
 void testLog() {
+    FMDB_LOG_SET_DEBUG_BREAK_ENABLED( NO );
     FMDB_LOG_E(@"FMDB_LOG_E");
     FMDB_LOG_EF(@"%@", @"FMDB_LOG_EF");
     FMDB_LOG_W(@"FMDB_LOG_W");
@@ -1375,6 +1409,7 @@ void testLog() {
     FMDB_LOG_VF(@"%@", @"FMDB_LOG_VF");
     FMDB_LOG_A(NO, @"FMDB_LOG_A");
     FMDB_LOG_AF(NO, @"%@", @"FMDB_LOG_AF");
+    FMDB_LOG_SET_DEBUG_BREAK_ENABLED( YES );
 }
 
 
@@ -1406,7 +1441,8 @@ void testConcurrency() {
     };
     
     [Tester loop_threading_concurrency:op1
-                            operation2:op2];
+                            operation2:op2
+                               timeout:100];
     
 
 }
@@ -1458,41 +1494,52 @@ void FMDBReportABugFunction() {
     
 }
 
+@interface TesterThread : NSThread {
+    TesterBlock _operation;
+    int _iteration;
+}
 
-
-typedef void(^TesterBlock)();
-
-@interface Tester : NSObject
-
-/** Run two operations concurrently, useful for testing for deadlocks in isolation.
- 
- @param operation1 - first operation block
- @param operation2 - second operation block
- 
- */
-+ (void)loop_threading_concurrency:(TesterBlock)operation1
-                        operation2:(TesterBlock)operation2;
+- (id)initWithName:(NSString *)name operation:(TesterBlock)operation;
 
 @end
 
+@implementation TesterThread
 
-@implementation Tester
+- (id)initWithName:(NSString *)name operation:(TesterBlock)operation {
+    if ((self = [super init])) {
+        self.name = name;
+        _operation = [operation copy];
+    }
+    return self;
+}
 
-
-+ (void)loop_threading_concurrency_operation:(TesterBlock)operation {
+- (void)main {
 	@autoreleasepool { // we're in a new thread here, so we need our own autorelease pool
-        while (true) {
-            operation();
+        while (!self.isCancelled) {
+            _operation();
+            FMDB_LOG_DF(@"%@ Iteration %d", self.name, ++_iteration);
         }
     }
 }
 
+@end
+
+@implementation Tester
 
 + (void)loop_threading_concurrency:(TesterBlock)operation1
                         operation2:(TesterBlock)operation2
+                           timeout:(NSTimeInterval)timeout
 {
-    [NSThread detachNewThreadSelector:@selector(loop_threading_concurrency_operation:) toTarget:self withObject:operation1];
-    [NSThread detachNewThreadSelector:@selector(loop_threading_concurrency_operation:) toTarget:self withObject:operation2];
+    TesterThread *thread1 = [[TesterThread alloc] initWithName:@"Tester Thread 1" operation:operation1];
+    TesterThread *thread2 = [[TesterThread alloc] initWithName:@"Tester Thread 2" operation:operation2];
+    
+    [thread1 start];
+    [thread2 start];
+    
+    usleep((useconds_t)timeout * 1000000);
+    
+    [thread1 cancel];
+    [thread2 cancel];
 }
 
 @end
