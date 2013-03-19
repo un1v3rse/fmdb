@@ -22,11 +22,14 @@
     
     NSString            *_query;
     NSMutableDictionary *_columnNameToIndexMap;
+    
+    NSDate              *_lastHit;
 }
 
 @property (atomic, retain) NSString *query;
 @property (readonly) NSMutableDictionary *columnNameToIndexMap;
 @property (atomic, retain) FMStatement *statement;
+@property (atomic, readonly) NSDate *lastHit;
 
 + (id)resultSetWithStatement:(FMStatement *)statement usingParentDatabase:(FMDatabase*)aDB;
 

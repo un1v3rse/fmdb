@@ -41,7 +41,6 @@ typedef void(^TesterBlock)();
 int main (int argc, const char * argv[]) {
     
     FMDB_LOG_SET_LEVEL(LOG_LEVEL_VERBOSE);
-    FMDB_LOG_SET_LEVEL(LOG_LEVEL_ERROR);
     
     NSSetUncaughtExceptionHandler(&uncaughtExceptionHandler);
     
@@ -351,7 +350,7 @@ int main (int argc, const char * argv[]) {
     
     // test the busy retry schtuff.
     
-    [db setMaxBusyRetries:5];
+    [db setBusyRetryTimeout:5];
     
     FMDatabase *newDb = [FMDatabase databaseWithPath:dbPath];
     [newDb open];
@@ -1144,17 +1143,17 @@ void testPool(NSString *dbPath) {
     [dbPool setMaximumNumberOfDatabasesToCreate:2];
     
     
+    FMDB_LOG_SET_DEBUG_BREAK_ENABLED(NO);
     [dbPool inDatabase:^(FMDatabase *db) {
         [dbPool inDatabase:^(FMDatabase *db2) {
-            FMDB_LOG_SET_DEBUG_BREAK_ENABLED(NO);
             [dbPool inDatabase:^(FMDatabase *db3) {
-                FMDB_LOG_SET_DEBUG_BREAK_ENABLED(YES);
                 FMDBQuickCheck([dbPool countOfOpenDatabases] == 2);
                 FMDBQuickCheck(!db3);
             }];
             
         }];
     }];
+    FMDB_LOG_SET_DEBUG_BREAK_ENABLED(YES);
     
     [dbPool setMaximumNumberOfDatabasesToCreate:0];
     
@@ -1442,7 +1441,7 @@ void testConcurrency() {
     
     [Tester loop_threading_concurrency:op1
                             operation2:op2
-                               timeout:100];
+                               timeout:10];
     
 
 }

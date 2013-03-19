@@ -11,6 +11,7 @@
 @implementation FMResultSet
 @synthesize query=_query;
 @synthesize statement=_statement;
+@synthesize lastHit=_lastHit;
 
 + (id)resultSetWithStatement:(FMStatement *)statement usingParentDatabase:(FMDatabase*)aDB {
     
@@ -20,6 +21,13 @@
     [rs setParentDB:aDB];
     
     return FMDBReturnAutoreleased(rs);
+}
+
+- (id)init {
+    if ((self = [super init])) {
+        _lastHit = [[NSDate alloc] init];
+    }
+    return self;
 }
 
 - (void)finalize {
@@ -146,29 +154,23 @@
 
 
 
-- (BOOL)_next:(int)retries {
+- (BOOL)_next:(BOOL *)retry {
     
     int rc;
-    BOOL retry = NO;
+    *retry = NO;
     @synchronized (self) {
-        retry = NO;
         
         rc = sqlite3_step([_statement statement]);
         
         if (SQLITE_BUSY == rc || SQLITE_LOCKED == rc) {
             // this will happen if the db is locked, like if we are doing an update or insert.
             // in that case, retry the step... and maybe wait just 10 milliseconds.
-            retry = YES;
+            *retry = YES;
             if (SQLITE_LOCKED == rc) {
                 rc = sqlite3_reset([_statement statement]);
                 if (rc != SQLITE_LOCKED) {
                     FMDB_LOG_EF(@"Unexpected result from sqlite3_reset (%d) rs", rc);
                 }
-            }
-            
-            if (retries >= [_parentDB maxBusyRetries]) {
-                FMDB_LOG_EF(@"Database busy (%@)", [_parentDB databasePath]);
-                retry = NO;
             }
         }
         else if (SQLITE_DONE == rc || SQLITE_ROW == rc) {
@@ -188,9 +190,8 @@
         
     }
     
-    if (retry) {
-        usleep(20);
-        return [self _next:retries+1];
+    if (*retry) {
+        return NO;
     }
     
     
@@ -202,7 +203,33 @@
 }
 
 - (BOOL)next {
-    return [self _next:0];
+    
+    NSDate *timeout = nil;
+    BOOL retry = YES;
+    while (retry) {
+        // TODO: !CW! decide whether to do this, cutting off a result set may cause corruption
+        //if (_closing)
+        //    return NO;
+        
+        FMDBAutorelease(_lastHit)
+        _lastHit = [[NSDate alloc] init];
+        
+        BOOL result = [self _next:&retry];
+        if (!retry)
+            return result;
+        
+        if (!timeout)
+            timeout = [NSDate dateWithTimeIntervalSinceNow:_parentDB.busyRetryTimeout];
+        
+        if ([timeout compare:[NSDate date]] == NSOrderedAscending) {
+            FMDB_LOG_EF(@"Database busy (%@)", [_parentDB databasePath]);
+            return NO;
+        }
+        
+        LOG_DF(@"Retrying Next: %@", _query);
+        usleep(FMDB_RETRY_SLEEP_MICROSECONDS);
+    }
+    return NO;
 }
 
 - (BOOL)hasAnotherRow {

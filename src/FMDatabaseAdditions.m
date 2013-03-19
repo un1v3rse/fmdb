@@ -127,21 +127,16 @@ return ret;
 
 #pragma clang diagnostic pop
 
-- (BOOL)validateSQL:(NSString*)sql error:(NSError**)error retries:(int)retries {
+- (BOOL)validateSQL:(NSString*)sql error:(NSError**)error retry:(BOOL *)retry {
     sqlite3_stmt *pStmt = NULL;
     BOOL validationSucceeded = YES;
-    BOOL retry = NO;
+    *retry = NO;
     
     @synchronized (self) {
         int rc = sqlite3_prepare_v2(_db, [sql UTF8String], -1, &pStmt, 0);
         if (rc == SQLITE_BUSY || rc == SQLITE_LOCKED) {
-            retry = YES;
-            
-            if (retries >= _maxBusyRetries) {
-                FMDB_LOG_EF(@"Database busy (%@)", [self databasePath]);
-                validationSucceeded = NO;
-                retry = NO;
-            }          
+            *retry = YES;
+            validationSucceeded = NO;
         } 
         else if (rc != SQLITE_OK) {
             validationSucceeded = NO;
@@ -156,16 +151,32 @@ return ret;
     
     sqlite3_finalize(pStmt);
     
-    if (retry) {
-        usleep(20);
-        return [self validateSQL:sql error:error retries:retries+1];
-    }
-    
     return validationSucceeded;
 }
 
 - (BOOL)validateSQL:(NSString*)sql error:(NSError**)error {
-    return [self validateSQL:sql error:error retries:0];
+    
+    BOOL retry = YES;
+    NSDate *timeout = nil;
+    while (retry) {
+        if (_closing)
+            return NO;
+        
+        BOOL result = [self validateSQL:sql error:error retry:&retry];
+        if (!retry)
+            return result;
+        
+        if (!timeout)
+            timeout = [NSDate dateWithTimeIntervalSinceNow:_busyRetryTimeout];
+        
+        if ([timeout compare:[NSDate date]] == NSOrderedAscending) {
+            FMDB_LOG_EF(@"Database busy (%@)", [self databasePath]);
+            return NO;
+        }
+        
+        usleep(FMDB_RETRY_SLEEP_MICROSECONDS);
+    }
+    return NO;
 }
 
 @end

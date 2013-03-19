@@ -45,6 +45,10 @@
 	#endif
 #endif
 
+enum {
+    FMDB_RETRY_SLEEP_MICROSECONDS = 50
+};
+
 
 @interface FMDatabase : NSObject  {
     
@@ -57,7 +61,8 @@
     BOOL                _shouldCacheStatements;
     BOOL                _isExecutingStatement;
     BOOL                _inTransaction;
-    int                 _maxBusyRetries;
+    BOOL                _closing;
+    NSTimeInterval      _busyRetryTimeout;
     
     NSMutableDictionary *_cachedStatements;
     NSMutableSet        *_openResultSets;
@@ -70,7 +75,7 @@
 
 @property (atomic, assign) BOOL traceExecution;
 @property (atomic, assign) BOOL checkedOut;
-@property (atomic, assign) int maxBusyRetries;
+@property (atomic, assign) NSTimeInterval busyRetryTimeout;
 @property (atomic, assign) BOOL crashOnErrors;
 @property (atomic, assign) BOOL logsErrors;
 @property (atomic, retain) NSMutableDictionary *cachedStatements;
@@ -137,7 +142,6 @@
 - (BOOL)close;
 - (BOOL)goodConnection;
 - (void)clearCachedStatements;
-- (void)closeOpenResultSets;
 - (BOOL)hasOpenResultSets;
 
 // encryption methods.  You need to have purchased the sqlite encryption extensions for these to work.
