@@ -51,7 +51,7 @@
 /* Begin PBXFileReference section */
 		08FB779EFE84155DC02AAC07 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = /System/Library/Frameworks/Foundation.framework; sourceTree = "<absolute>"; };
 		32A70AAB03705E1F00C91783 /* fmdb_Prefix.pch */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = fmdb_Prefix.pch; sourceTree = "<group>"; };
-		83C99A9916D541CD004B5C49 /* FMDBLog.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = FMDBLog.h; sourceTree = "<group>"; };
+		8376D11A16F8E03700A06978 /* FMDBLog.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = FMDBLog.h; path = src/FMDBLog.h; sourceTree = "<group>"; };
 		8DD76FA10486AA7600D96B5E /* fmdb */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = fmdb; sourceTree = BUILT_PRODUCTS_DIR; };
 		C6859EA3029092ED04C91782 /* fmdb.1 */ = {isa = PBXFileReference; lastKnownFileType = text.man; path = fmdb.1; sourceTree = "<group>"; };
 		CC47A00D148581E9002CCDAB /* FMDatabaseQueue.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = FMDatabaseQueue.h; path = src/FMDatabaseQueue.h; sourceTree = "<group>"; };
@@ -123,13 +123,13 @@
 				CC50F2CB0DF9183600E4AAAE /* FMDatabaseAdditions.m */,
 				CCC24EBA0A13E34D00A6D3E3 /* FMDatabase.h */,
 				CCC24EBB0A13E34D00A6D3E3 /* FMDatabase.m */,
+				8376D11A16F8E03700A06978 /* FMDBLog.h */,
 				CCC24EBF0A13E34D00A6D3E3 /* FMResultSet.h */,
 				CCC24EC00A13E34D00A6D3E3 /* FMResultSet.m */,
 				CC9E4EB713B31188005F9210 /* FMDatabasePool.h */,
 				CC9E4EB813B31188005F9210 /* FMDatabasePool.m */,
 				32A70AAB03705E1F00C91783 /* fmdb_Prefix.pch */,
 				CCC24EBE0A13E34D00A6D3E3 /* fmdb.m */,
-				83C99A9916D541CD004B5C49 /* FMDBLog.h */,
 			);
 			name = Source;
 			sourceTree = "<group>";
