@@ -226,7 +226,7 @@
             return NO;
         }
         
-        LOG_DF(@"Retrying Next: %@", _query);
+        FMDB_LOG_DF(@"Retrying Next: %@", _query);
         usleep(FMDB_RETRY_SLEEP_MICROSECONDS);
     }
     return NO;

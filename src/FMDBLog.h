@@ -2,7 +2,7 @@
 //  FMDBLog.h
 //  fmdb
 //
-//  Created by Chris Wright on 13-02-20.
+//  Created by Brane on 13-02-20.
 //
 //
 
@@ -54,8 +54,8 @@ static int FMDB_LOG_LEVEL = LOG_LEVEL_DEBUG;
 
 #define FMDB_LOG_SET_LEVEL(level) FMDB_LOG_LEVEL = level
 
-#define FMDB_LOG(level,msg) if (level >= FMDB_LOG_LEVEL) { NSLog(@"%s:%d %@", __PRETTY_FUNCTION__, __LINE__, msg); } else
-#define FMDB_LOGF(level,fmt,...) if (level >= FMDB_LOG_LEVEL) { NSLog(@"%s:%d %@", __PRETTY_FUNCTION__, __LINE__, [NSString stringWithFormat:fmt, __VA_ARGS__]); } else
+#define FMDB_LOG(level,msg) if (level >= FMDB_LOG_LEVEL) { NSLog(@"%s:%d %@", __PRETTY_FUNCTION__, __LINE__, msg); }
+#define FMDB_LOGF(level,fmt,...) if (level >= FMDB_LOG_LEVEL) { NSLog(@"%s:%d %@", __PRETTY_FUNCTION__, __LINE__, [NSString stringWithFormat:fmt, __VA_ARGS__]); }
 
 #define FMDB_LOG_E(msg) FMDB_LOG(LOG_LEVEL_ERROR,msg)
 #define FMDB_LOG_EF(fmt,...) FMDB_LOGF(LOG_LEVEL_ERROR,fmt,__VA_ARGS__)
