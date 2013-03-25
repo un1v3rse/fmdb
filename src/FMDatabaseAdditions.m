@@ -137,8 +137,7 @@
     FMResultSet *rs = [self executeQuery:query withArgumentsInArray:nil orDictionary:nil orVAList:args];
     va_end(args);
     if ([rs next]) {
-        if (![rs columnIndexIsNull:0])
-            result = [NSNumber numberWithDouble:[rs doubleForColumnIndex:0]];
+        result = [rs numberForColumnIndex:0];
     }
     [rs close];
     return result;
