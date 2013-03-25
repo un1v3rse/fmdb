@@ -72,6 +72,9 @@
 - (NSData*)dataForColumn:(NSString*)columnName;
 - (NSData*)dataForColumnIndex:(int)columnIdx;
 
+- (NSNumber*)numberForColumn:(NSString*)columnName;
+- (NSNumber*)numberForColumnIndex:(int)columnIdx;
+
 - (const unsigned char *)UTF8StringForColumnIndex:(int)columnIdx;
 - (const unsigned char *)UTF8StringForColumnName:(NSString*)columnName;
 

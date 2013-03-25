@@ -357,6 +357,21 @@
 }
 
 
+
+- (NSNumber *)numberForColumn:(NSString*)columnName {
+    return [self numberForColumnIndex:[self columnIndexForName:columnName]];
+}
+
+- (NSNumber*)numberForColumnIndex:(int)columnIdx {
+    
+    if (sqlite3_column_type([_statement statement], columnIdx) == SQLITE_NULL || (columnIdx < 0)) {
+        return nil;
+    }
+    
+    return [NSNumber numberWithDouble:sqlite3_column_double([_statement statement], columnIdx)];
+}
+
+
 - (NSData*)dataNoCopyForColumn:(NSString*)columnName {
     return [self dataNoCopyForColumnIndex:[self columnIndexForName:columnName]];
 }
