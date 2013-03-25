@@ -11,12 +11,14 @@
 
 
 - (int)intForQuery:(NSString*)objs, ...;
-- (long)longForQuery:(NSString*)objs, ...; 
+- (long)longForQuery:(NSString*)objs, ...;
+- (long long int)longLongForQuery:(NSString*)query, ...;
 - (BOOL)boolForQuery:(NSString*)objs, ...;
 - (double)doubleForQuery:(NSString*)objs, ...;
 - (NSString*)stringForQuery:(NSString*)objs, ...; 
 - (NSData*)dataForQuery:(NSString*)objs, ...;
 - (NSDate*)dateForQuery:(NSString*)objs, ...;
+- (NSNumber*)numberForQuery:(NSString*)objs, ...;
 
 // Notice that there's no dataNoCopyForQuery:.
 // That would be a bad idea, because we close out the result set, and then what

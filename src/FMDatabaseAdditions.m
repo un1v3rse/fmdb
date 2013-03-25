@@ -16,44 +16,132 @@
 
 @implementation FMDatabase (FMDatabaseAdditions)
 
-#define RETURN_RESULT_FOR_QUERY_WITH_SELECTOR(type, sel)             \
-va_list args;                                                        \
-va_start(args, query);                                               \
-FMResultSet *resultSet = [self executeQuery:query withArgumentsInArray:0x00 orDictionary:0x00 orVAList:args];   \
-va_end(args);                                                        \
-if (![resultSet next]) { return (type)0; }                           \
-type ret = [resultSet sel:0];                                        \
-[resultSet close];                                                   \
-[resultSet setParentDB:nil];                                         \
-return ret;
-
-
 - (NSString*)stringForQuery:(NSString*)query, ... {
-    RETURN_RESULT_FOR_QUERY_WITH_SELECTOR(NSString *, stringForColumnIndex);
+    NSString *result = nil;
+    va_list args;
+    va_start(args, query);
+    FMResultSet *rs = [self executeQuery:query withArgumentsInArray:nil orDictionary:nil orVAList:args];
+    va_end(args);
+    if ([rs next]) {
+        result = [rs stringForColumnIndex:0];
+    }
+    [rs close];
+    return result;
 }
 
 - (int)intForQuery:(NSString*)query, ... {
-    RETURN_RESULT_FOR_QUERY_WITH_SELECTOR(int, intForColumnIndex);
+	int result = 0;
+    va_list args;
+    va_start(args, query);
+    
+    FMResultSet* rs = [self executeQuery:query withArgumentsInArray:nil orDictionary:nil orVAList:args];
+	if ([rs next]) {
+		result = [rs intForColumnIndex:0];
+	}
+	[rs close];
+    
+    va_end(args);
+    return result;
 }
 
 - (long)longForQuery:(NSString*)query, ... {
-    RETURN_RESULT_FOR_QUERY_WITH_SELECTOR(long, longForColumnIndex);
+	long result = 0L;
+    va_list args;
+    va_start(args, query);
+    
+    FMResultSet* rs = [self executeQuery:query withArgumentsInArray:nil orDictionary:nil orVAList:args];
+	if ([rs next]) {
+		result = [rs longForColumnIndex:0];
+	}
+	[rs close];
+    
+    va_end(args);
+    return result;
+}
+
+- (long long int)longLongForQuery:(NSString*)query, ... {
+	long long int result = 0LL;
+    va_list args;
+    va_start(args, query);
+    
+    FMResultSet* rs = [self executeQuery:query withArgumentsInArray:nil orDictionary:nil orVAList:args];
+	if ([rs next]) {
+		result = [rs longLongIntForColumnIndex:0];
+	}
+	[rs close];
+    
+    va_end(args);
+    return result;
 }
 
 - (BOOL)boolForQuery:(NSString*)query, ... {
-    RETURN_RESULT_FOR_QUERY_WITH_SELECTOR(BOOL, boolForColumnIndex);
+	BOOL result = NO;
+    va_list args;
+    va_start(args, query);
+    
+    FMResultSet* rs = [self executeQuery:query withArgumentsInArray:nil orDictionary:nil orVAList:args];
+	if ([rs next]) {
+		result = [rs boolForColumnIndex:0];
+	}
+	[rs close];
+    
+    va_end(args);
+    return result;
 }
 
 - (double)doubleForQuery:(NSString*)query, ... {
-    RETURN_RESULT_FOR_QUERY_WITH_SELECTOR(double, doubleForColumnIndex);
+	double result = 0;
+    va_list args;
+    va_start(args, query);
+    
+    FMResultSet* rs = [self executeQuery:query withArgumentsInArray:nil orDictionary:nil orVAList:args];
+	if ([rs next]) {
+		result = [rs doubleForColumnIndex:0];
+	}
+	[rs close];
+    
+    va_end(args);
+    return result;
 }
 
 - (NSData*)dataForQuery:(NSString*)query, ... {
-    RETURN_RESULT_FOR_QUERY_WITH_SELECTOR(NSData *, dataForColumnIndex);
+    NSData *result = nil;
+    va_list args;
+    va_start(args, query);
+    FMResultSet *rs = [self executeQuery:query withArgumentsInArray:nil orDictionary:nil orVAList:args];
+    va_end(args);
+    if ([rs next]) {
+        result = [rs dataForColumnIndex:0];
+    }
+    [rs close];
+    return result;
 }
 
 - (NSDate*)dateForQuery:(NSString*)query, ... {
-    RETURN_RESULT_FOR_QUERY_WITH_SELECTOR(NSDate *, dateForColumnIndex);
+    NSDate *result = nil;
+    va_list args;
+    va_start(args, query);
+    FMResultSet *rs = [self executeQuery:query withArgumentsInArray:nil orDictionary:nil orVAList:args];
+    va_end(args);
+    if ([rs next]) {
+        result = [rs dateForColumnIndex:0];
+    }
+    [rs close];
+    return result;
+}
+
+- (NSNumber*)numberForQuery:(NSString*)query, ... {
+    NSNumber *result = nil;
+    va_list args;
+    va_start(args, query);
+    FMResultSet *rs = [self executeQuery:query withArgumentsInArray:nil orDictionary:nil orVAList:args];
+    va_end(args);
+    if ([rs next]) {
+        if (![rs columnIndexIsNull:0])
+            result = [NSNumber numberWithDouble:[rs doubleForColumnIndex:0]];
+    }
+    [rs close];
+    return result;
 }
 
 
