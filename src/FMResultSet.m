@@ -372,6 +372,17 @@
 }
 
 
+- (NSDecimalNumber *)decimalNumberForColumn:(NSString*)columnName {
+    return [self decimalNumberForColumnIndex:[self columnIndexForName:columnName]];
+}
+
+- (NSDecimalNumber *)decimalNumberForColumnIndex:(int)columnIdx {
+    
+    NSString *s = [self stringForColumnIndex:columnIdx];
+    return s ? [NSDecimalNumber decimalNumberWithString:s] : nil;
+}
+
+
 - (NSData*)dataNoCopyForColumn:(NSString*)columnName {
     return [self dataNoCopyForColumnIndex:[self columnIndexForName:columnName]];
 }

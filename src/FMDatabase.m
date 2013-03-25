@@ -477,6 +477,9 @@ static FMDB_LOG_T_UNITS QUERY_TIMING_CUTOFF = 0;
         else
             sqlite3_bind_double(pStmt, idx, [obj timeIntervalSince1970]);
     }
+    else if ([obj isKindOfClass:[NSDecimalNumber class]]) {
+        sqlite3_bind_text(pStmt, idx, [[obj description] UTF8String], -1, SQLITE_STATIC);
+    }
     else if ([obj isKindOfClass:[NSNumber class]]) {
         
         if (strcmp([obj objCType], @encode(BOOL)) == 0) {

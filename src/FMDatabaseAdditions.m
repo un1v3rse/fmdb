@@ -143,6 +143,19 @@
     return result;
 }
 
+- (NSDecimalNumber*)decimalNumberForQuery:(NSString*)query, ... {
+    NSDecimalNumber *result = nil;
+    va_list args;
+    va_start(args, query);
+    FMResultSet *rs = [self executeQuery:query withArgumentsInArray:nil orDictionary:nil orVAList:args];
+    va_end(args);
+    if ([rs next]) {
+        result = [rs decimalNumberForColumnIndex:0];
+    }
+    [rs close];
+    return result;
+}
+
 
 - (BOOL)tableExists:(NSString*)tableName {
     
