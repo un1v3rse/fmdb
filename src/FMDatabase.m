@@ -12,12 +12,6 @@ static const NSTimeInterval FMDB_STALE_INTERVAL = 0.5;
 static FMDB_LOG_T_UNITS QUERY_TIMING_CUTOFF = 0;
 #endif // ! DEBUG
 
-@interface FMDatabase ()
-
-- (FMResultSet *)executeQuery:(NSString *)sql withArgumentsInArray:(NSArray*)arrayArgs orDictionary:(NSDictionary *)dictionaryArgs orVAList:(va_list)args;
-- (BOOL)executeUpdate:(NSString*)sql error:(NSError**)outErr withArgumentsInArray:(NSArray*)arrayArgs orDictionary:(NSDictionary *)dictionaryArgs orVAList:(va_list)args;
-@end
-
 @implementation FMDatabase
 @synthesize cachedStatements=_cachedStatements;
 @synthesize logsErrors=_logsErrors;
